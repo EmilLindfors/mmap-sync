@@ -12,8 +12,10 @@
 //!
 //! The `synchronizer` module utilizes this `guard` module to manage memory safety, allowing
 //! users to focus on their application logic.
-use rkyv::{Archive, Archived};
+
 use std::ops::Deref;
+
+use bincode::{BorrowDecode, Decode};
 
 use crate::instance::InstanceVersion;
 use crate::state::State;
@@ -44,15 +46,16 @@ impl<'a> Drop for ReadGuard<'a> {
 }
 
 /// `Synchronizer` result
-pub struct ReadResult<'a, T: Archive> {
+pub struct ReadResult<'a, T: bincode::Decode> {//BorrowDecode<'a>> {
     _guard: ReadGuard<'a>,
-    entity: &'a Archived<T>,
+    entity: T,
     switched: bool,
 }
 
-impl<'a, T: Archive> ReadResult<'a, T> {
+//impl<'a, T: bincode::Decode + BorrowDecode<'a>> ReadResult<'a, T> {
+    impl<'a, T: bincode::Decode> ReadResult<'a, T> {
     /// Creates new `ReadResult` with specified parameters
-    pub(crate) fn new(_guard: ReadGuard<'a>, entity: &'a Archived<T>, switched: bool) -> Self {
+    pub(crate) fn new(_guard: ReadGuard<'a>, entity: T, switched: bool) -> Self {
         ReadResult {
             _guard,
             entity,
@@ -64,13 +67,19 @@ impl<'a, T: Archive> ReadResult<'a, T> {
     pub fn is_switched(&self) -> bool {
         self.switched
     }
+
+    /// Returns a reference to the entity
+    pub fn entity(&self) -> &T {
+        &self.entity
+    }
+
 }
 
-impl<'a, T: Archive> Deref for ReadResult<'a, T> {
-    type Target = Archived<T>;
+impl <'a, T: bincode::Decode + bincode::BorrowDecode<'a>> Deref for ReadResult<'a, T> {
+    type Target = T;
 
-    /// Dereferences stored `entity` for easier access
-    fn deref(&self) -> &Archived<T> {
-        self.entity
+    fn deref(&self) -> &Self::Target {
+        &self.entity
     }
 }
+

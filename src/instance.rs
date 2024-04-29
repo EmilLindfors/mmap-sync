@@ -61,6 +61,22 @@ impl InstanceVersion {
     }
 }
 
+impl PartialEq<InstanceVersion> for &mut InstanceVersion {
+    /// Compare two `InstanceVersion` instances
+    #[inline]
+    fn eq(&self, other: &InstanceVersion) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Default for InstanceVersion {
+    /// Create default `InstanceVersion` (uninitialized)
+    #[inline]
+    fn default() -> Self {
+        InstanceVersion(0)
+    }
+}
+
 impl TryFrom<u64> for InstanceVersion {
     type Error = SynchronizerError;
 

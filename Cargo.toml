@@ -11,9 +11,8 @@ keywords = ["memory-mapping", "synchronization", "interprocess", "wait-free", "z
 categories = ["os", "filesystem", "concurrency", "data-structures", "memory-management"]
 
 [dependencies]
-bytecheck = { version = "~0.6.8", default-features = false }
 memmap2 = "0.7.0"
-rkyv = { version = "0.7.40", features = ["validation", "strict"] }
+bincode = "2.0.0-rc.3"
 seahash = "4.1.0"
 thiserror = "1.0.30"
 

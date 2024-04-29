@@ -4,11 +4,7 @@
 //!
 //! Furthermore, with the aid of the [rkyv](https://rkyv.org/) library, `Synchronizer` can perform zero-copy deserialization, reducing time and memory usage when accessing data.
 
-use bytecheck::CheckBytes;
-use rkyv::ser::serializers::AllocSerializer;
-use rkyv::ser::Serializer;
-use rkyv::validation::validators::DefaultValidator;
-use rkyv::{archived_root, check_archived_root, Archive, Serialize};
+
 use seahash::SeaHasher;
 use std::ffi::OsStr;
 use std::hash::Hasher;
@@ -59,8 +55,7 @@ pub enum SynchronizerError {
     InvalidInstanceVersionParams,
 }
 
-/// Default serializer with 1 MB scratch space allocated on the heap.
-type DefaultSerializer = AllocSerializer<1_000_000>;
+
 
 impl Synchronizer {
     /// Create new instance of `Synchronizer` using given `path_prefix`
@@ -94,19 +89,9 @@ impl Synchronizer {
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<DefaultSerializer>,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T: bincode::Encode,
     {
-        // serialize given entity into bytes
-        let mut serializer = DefaultSerializer::default();
-        let _ = serializer
-            .serialize_value(entity)
-            .map_err(|_| FailedEntityWrite)?;
-        let data = serializer.into_serializer().into_inner();
-
-        // ensure that serialized bytes can be deserialized back to `T` struct successfully
-        check_archived_root::<T>(&data).map_err(|_| FailedEntityRead)?;
-
+       let data = bincode::encode_to_vec(entity, bincode::config::standard()).map_err(|_| FailedEntityWrite)?;
         // fetch current state from mapped memory
         let state = self.state_container.state(true)?;
 
@@ -135,8 +120,7 @@ impl Synchronizer {
         grace_duration: Duration,
     ) -> Result<(usize, bool), SynchronizerError>
     where
-        T: Serialize<DefaultSerializer>,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T: bincode::Encode,
     {
         // fetch current state from mapped memory
         let state = self.state_container.state(true)?;
@@ -175,10 +159,9 @@ impl Synchronizer {
     /// `rkyv::archived_root` function, which has its own safety considerations. Particularly, it
     /// assumes the byte slice provided to it accurately represents an archived object, and that the
     /// root of the object is stored at the end of the slice.
-    pub unsafe fn read<T>(&mut self, check_bytes: bool) -> Result<ReadResult<T>, SynchronizerError>
+    pub unsafe fn read<'a, T>(&'a mut self) -> Result<ReadResult<T>, SynchronizerError>
     where
-        T: Archive,
-        T::Archived: for<'b> CheckBytes<DefaultValidator<'b>>,
+        T: bincode::Decode //+ bincode::BorrowDecode<'a>
     {
         // fetch current state from mapped memory
         let state = self.state_container.state(false)?;
@@ -193,10 +176,15 @@ impl Synchronizer {
         let (data, switched) = self.data_container.data(version)?;
 
         // fetch entity from data using zero-copy deserialization
-        let entity = match check_bytes {
-            false => archived_root::<T>(data),
-            true => check_archived_root::<T>(data).map_err(|_| FailedEntityRead)?,
-        };
+        let (entity, usize): (T, usize) = bincode::decode_from_slice(data, bincode::config::standard()).map_err(
+            |err| {
+                eprintln!("Failed to decode entity: {:?}", err);
+                FailedEntityRead
+            },
+        )?;
+
+        println!("Read {} bytes", usize);
+    
 
         Ok(ReadResult::new(guard, entity, switched))
     }
@@ -216,17 +204,15 @@ impl Synchronizer {
 mod tests {
     use crate::instance::InstanceVersion;
     use crate::synchronizer::Synchronizer;
-    use bytecheck::CheckBytes;
     use rand::distributions::Uniform;
     use rand::prelude::*;
-    use rkyv::{Archive, Deserialize, Serialize};
+    use bincode::{Encode, Decode};
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
 
-    #[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-    #[archive_attr(derive(CheckBytes))]
+    #[derive(Encode, Decode, Debug, PartialEq)]
     struct MockEntity {
         version: u32,
         map: HashMap<u64, Vec<f32>>,
@@ -261,10 +247,10 @@ mod tests {
 
     #[test]
     fn test_synchronizer() {
-        let path = "/tmp/synchro_test";
-        let state_path = path.to_owned() + "_state";
-        let data_path_0 = path.to_owned() + "_data_0";
-        let data_path_1 = path.to_owned() + "_data_1";
+        let path = std::env::current_dir().unwrap().join("test_synchronizer");
+        let state_path = path.join("_state");
+        let data_path_0 = path.join("_data_0");
+        let data_path_1 = path.join("_data_1");
 
         // clean up test files before tests
         fs::remove_file(&state_path).unwrap_or_default();
@@ -279,11 +265,11 @@ mod tests {
         let mut entity_generator = MockEntityGenerator::new(3);
 
         // check that `read` returns error when writer didn't write yet
-        let res = unsafe { reader.read::<MockEntity>(false) };
+        let res = unsafe { reader.read::<MockEntity>() };
         assert!(res.is_err());
         assert_eq!(
             res.err().unwrap().to_string(),
-            "error reading state file: No such file or directory (os error 2)"
+            "error reading state file: The system cannot find the file specified. (os error 2)"
         );
         assert!(!Path::new(&state_path).exists());
 
@@ -348,7 +334,7 @@ mod tests {
         expected_entity: &MockEntity,
         expected_is_switched: bool,
     ) {
-        let actual_entity = unsafe { synchronizer.read::<MockEntity>(false).unwrap() };
+        let actual_entity = unsafe { synchronizer.read::<MockEntity>().unwrap() };
         assert_eq!(actual_entity.map, expected_entity.map);
         assert_eq!(actual_entity.version, expected_entity.version);
         assert_eq!(actual_entity.is_switched(), expected_is_switched);
